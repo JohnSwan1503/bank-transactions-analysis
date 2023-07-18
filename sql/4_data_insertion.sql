@@ -1,5 +1,12 @@
 -- Populate the `rules` table with some default values
-SELECT upsert_rules(2023, 35.00, 10, 10.00, 100, 50.00);
+SELECT upsert_rules(
+        2023,
+        money '35.00',
+        10,
+        money '10.00',
+        100,
+        money '50.00'
+    );
 --
 -- Populate the `accounts` table with some data for all 4 accounts for the start of 2023
 INSERT INTO accounts (

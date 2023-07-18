@@ -1,10 +1,10 @@
 CREATE OR REPLACE FUNCTION upsert_rules(
-        rule_year INTEGER,
-        overdraft_fee MONEY,
-        minimum_transactions INTEGER,
-        minimum_transactions_fee MONEY,
-        maximum_transactions INTEGER,
-        maximum_transactions_fee MONEY
+        _rule_year INTEGER,
+        _overdraft_fee MONEY,
+        _minimum_transactions INTEGER,
+        _minimum_transactions_fee MONEY,
+        _maximum_transactions INTEGER,
+        _maximum_transactions_fee MONEY
     ) RETURNS VOID AS $$ BEGIN
 INSERT INTO rules (
         rule_year,
@@ -15,12 +15,12 @@ INSERT INTO rules (
         maximum_transactions_fee
     )
 VALUES (
-        rule_year,
-        overdraft_fee,
-        minimum_transactions,
-        minimum_transactions_fee,
-        maximum_transactions,
-        maximum_transactions_fee
+        _rule_year,
+        _overdraft_fee,
+        _minimum_transactions,
+        _minimum_transactions_fee,
+        _maximum_transactions,
+        _maximum_transactions_fee
     ) ON CONFLICT (rule_year) DO
 UPDATE
 SET overdraft_fee = excluded.overdraft_fee,
