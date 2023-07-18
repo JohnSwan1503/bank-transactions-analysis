@@ -9,7 +9,7 @@ This expands the scope to solve the "year-end account balance after fees" proble
  * An arbitrary set of rules for the given year
 While also providing transaction and account data generation tools.
 
-There is a dockerfile that initializes the data type, table, function definitions that make this possible.
+There is a docker-compose.yml file that initializes the data type, table, function definitions that make this possible.
 To reach the solution, just run the `4_data_insertion.sql` and `5_solution.sql` file in that order.
 
 # TODO
