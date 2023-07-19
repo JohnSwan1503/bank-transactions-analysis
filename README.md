@@ -307,6 +307,7 @@ $$ LANGUAGE plpgsql;
 ```
 <sup>Create a new function **upsert_rules** to perform the INSERT UPDATE ON CONFLICT sql command.</sup>
 
+---
 ### Step 5: Calculating Year-end Balance
 TODO
 
