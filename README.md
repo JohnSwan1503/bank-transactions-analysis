@@ -14,5 +14,5 @@ To reach the solution, just run the `4_data_insertion.sql` and `5_solution.sql` 
 
 # TODO
  - More informative README file
- - New account generation function
- - Update the rules table and the upsert_rules, generate_transactions, calculate_year_end_balances functions to account for different accountTypes
+ - ~~New account generation function~~
+ - Update the ~~rules table~~ and the ~~upsert_rules,~~ ~~generate_transactions,~~ calculate_year_end_balances functions to account for different accountTypes

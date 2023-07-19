@@ -1,0 +1,19 @@
+{
+    "sqltools.connections": [
+        {
+            "previewLimit": 50,
+            "server": "localhost",
+            "port": 5432,
+            "driver": "PostgreSQL",
+            "socketPath": "/var/run/postgresql/.s.PGSQL.5432",
+            "name": "development",
+            "database": "postgres",
+            "username": "postgres",
+            "password": "example"
+        }
+    ],
+    "[sql]": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "bradymholt.pgformatter"},
+    "pgFormatter.functionCase": "uppercase",
+}
