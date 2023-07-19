@@ -6,17 +6,16 @@ CREATE TYPE transactionType AS ENUM(
 CREATE TYPE accountType AS ENUM(
     'personal',
     'business',
-    'billionaire'
+    'executiveSelect'
 );
 
 CREATE TYPE ruleType AS ENUM(
-    'activity_max',
     'activity_min',
+    'activity_max',
     'balance'
 );
 
 CREATE TYPE feeType AS (
-    rule_valu numeric,
+    rule_value numeric,
     fee money
 );
-

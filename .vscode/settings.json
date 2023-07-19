@@ -16,4 +16,6 @@
         "editor.formatOnSave": true,
         "editor.defaultFormatter": "bradymholt.pgformatter"},
     "pgFormatter.functionCase": "uppercase",
+    "pgFormatter.wrapLimit": 100,
+    // "pgFormatter.extraFunction": "/home/swan/repo_depot/Problem_3_of_3/sql/3_function_definitions/pgFormatter_functionlist.txt"
 }

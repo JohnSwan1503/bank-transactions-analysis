@@ -1,10 +1,10 @@
 CREATE TABLE IF NOT EXISTS accounts(
     account_id integer NOT NULL PRIMARY KEY,
     account_type accountType NOT NULL DEFAULT 'personal' ::accountType,
-    created_on date NOT NULL DEFAULT '12-31-2022' ::date,
+    created_on date NOT NULL CHECK (created_on >= '01-01-2020'::date),
     starting_balance GENERATED ALWAYS AS ( CASE WHEN account_type = 'personal'::accountType THEN money '1000.00'
     WHEN account_type = 'business'::accountType THEN money '10000.00'
-    WHEN account_type = 'billionaire'::accountType THEN money '10000.00'
+    WHEN account_type = 'executiveSelect'::accountType THEN money '10000.00'
     END) STORED
 );
 
