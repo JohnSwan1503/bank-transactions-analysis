@@ -308,7 +308,7 @@ $$ LANGUAGE plpgsql;
 <sup>Create a new function **upsert_rules** to perform the INSERT UPDATE ON CONFLICT sql command.</sup>
 
 ---
-### Step 5: Calculating Year-end Balance
+### Finding a Solution
 TODO
 
 [^1]: Account types are determined randomly. The `weights` array is transformed using some user-defined sql and plpgsql functions so that the values sum to 1. In the case that there are one or more negative values passed to the `weights` parameter, array values `a` have `y` added to them where `y = 0 - min(weights)`. To keep function logic maintainable and legible, I created a module of utility functions to manipulate arrays. This was additionally in order to avoid having to write sql code like, `SELECT COALESCE((SELECT SUM(x) FROM UNNEST({some_array}) AS x), 0.0)` over and over.
