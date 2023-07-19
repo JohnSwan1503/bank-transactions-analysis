@@ -7,6 +7,7 @@ applying fees each month based on 1 or 2 rules about account activity.
 This expands the scope to solve the "year-end account balance after fees" problem for:
  * An arbitrary number of accounts
  * An arbitrary set of rules for the given year
+   
 While also providing transaction and account data generation tools.
 
 There is a docker-compose.yml file that initializes the data type, table, function definitions that make this possible.
