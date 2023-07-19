@@ -125,7 +125,7 @@ CREATE TYPE feeType AS (
 ```
 <sup>_Create a **ruleType** ENUM and a **feeType** composite type for use in the **rules** table._</sup>
 
-```sql Create a **rules** table to store the penalties, their types, fee structure, trigger, starting year, and account type they apply to.
+```sql
 CREATE TABLE IF NOT EXISTS rules(
     rule_year integer NOT NULL CHECK (rule_year >= 2020),
     account_type accountType NOT NULL,
@@ -139,7 +139,7 @@ CREATE TABLE IF NOT EXISTS rules(
 ### Step 4: Generating the Data
 Now I could **finally** start inserting some data into these tables. However, considering that there would be potentially thousands of records to insert, I did't want to do that manually if I could help it. Luckily sql and plpgsql functions and procedures can do that work for me.
 
-First, to generate an arbitrary number of accounts (with different types) I created `generate_accounts(int, numeric[], date)` to return a table (think: output of a SELECT statement) of account types and starting dates. The function would would accept the following parameters:
+First, to generate an arbitrary number of accounts (with different types) I created `generate_accounts(int, numeric[], date)` to return a table (think: output of a SELECT statement) of account types and starting dates. The function would would accept the following parameters: [^1]
  - `num_accounts` _(integer)_: the number of accounts to generate; required
  - `weights` _(numeric\[3])_: array of weights to defining the relative distribution of account types; optional
    - Order of weights: `personal`, `business`, and `executiveSelect`
@@ -148,7 +148,40 @@ First, to generate an arbitrary number of accounts (with different types) I crea
    - Defaults to a different random date between the current date and Jan-1, 2020 for each account being generated.
    - If parameter value is prior to Jan-1, 2020 then the latter of the two dates is used.
 
-```plpgsql Testing Testing
+```plpgsql
+CREATE OR REPLACE FUNCTION array_scale(arr numeric[], x numeric DEFAULT 1)
+    RETURNS numeric[]
+    AS $$
+DECLARE
+    y numeric;
+BEGIN
+    arr := array_shift_min(arr, GREATEST(array_min(arr), 0.0));
+    y := array_sum(arr);
+    IF y = 0 THEN
+        RETURN ARRAY (
+            SELECT
+                x / ARRAY_LENGTH(arr, 1)
+            FROM
+                UNNEST(arr) AS x);
+    ELSE
+        arr := ARRAY (
+            SELECT
+                z * x / y
+            FROM
+                UNNEST(arr) AS z);
+        arr[1] = arr[1] + x - array_sum(arr);
+        RETURN arr;
+    END IF;
+END;
+$$
+LANGUAGE plpgsql;
+
+SELECT
+    array_sum(ARRAY[1, 2, 3, 4, 5]);
+```
+<sup>Create a new functions **array_scale** [^1]</sup> 
+
+```plpgsql
 CREATE OR REPLACE FUNCTION generate_accounts(num_accounts integer, weights
     numeric[3] DEFAULT ARRAY[1.0, 1.0, 1.0], start_date date DEFAULT NULL)
     RETURNS TABLE(
@@ -184,15 +217,97 @@ $$
 LANGUAGE plpgsql;
 
 ```
+<sup>Create a new function, **generate_accounts** that returns a table by utilizing the **RETURN NEXT** plpgsql pattern</sup>
 
-#### Array Manipulation Functions
-Account types are determined randomly. The `weights` array is transformed using some user-defined sql and plpgsql functions so that the values sum to 1. In the case that there are one or more negative values passed to the `weights` parameter, array values `a` have `y` added to them where `y = 0 - min(weights)`.
+Next, to generate some transaction data, I created `generate_transactions(integer, integer)` to return a table of `account_ids`, `transaction_amounts`, and `transaction_dates`. Since this endeavor was sufficiently complex: 
+ - I decided to just pick a ranom value in the range -200..200 as the transaction ammount for all transactions. 
+ - There is an integer input parameter `year` that defines the year to create transactions for.
+ - To randomly incur penalties for no monthly activity, 1 - 2 random months are optionally picked for each account generating transactions.
+The two function parameters are as follows:
+ - `transation_count` _(integer)_: The maximum number of transactions to select
+   - Every valid account has `transaction_count // count({valid accounts})` (or 1, whichever is bigger) opportunities to generate a transaction.
+   - If for some reason a transaction cannot occur, the loop continues.
+ - `_year` _(integer)_: The year the generated transactions occur in
+   - Accounts may not transact before they exist. This negatively affects the to
+   - Accounts that were not yet started by the input parameter, `_year` are not considered in {valid accounts}
 
+```plpgsql
+CREATE OR REPLACE FUNCTION generate_transactions(transaction_count integer, _year integer)
+    RETURNS TABLE(
+        account_id integer,
+        transaction_amount money,
+        transaction_date date
+    )
+    AS $$
+DECLARE
+    account integer;
+    t_date date;
+    excluded_months int[];
+    current_account RECORD;
+BEGIN
+    transaction_count := transaction_count / GREATEST((
+        SELECT
+            COUNT(*)
+        FROM accounts
+        WHERE
+            EXTRACT(YEAR FROM created_on)::int <= _year)::int, 1);
+    FOR current_account IN
+    SELECT
+        *
+    FROM
+        accounts
+    WHERE
+        EXTRACT(YEAR FROM created_on)::int = _year LOOP
+            excluded_months := ARRAY[(RANDOM() * 24)::int,(RANDOM() * 24)::int];
+            FOR i IN 1..transaction_count::int LOOP
+		t_date := GREATEST(current_account.created_on, ('01-01-' || _year::text)::date) +
+		    (RANDOM() * (('12-31-' || _year::text)::date -
+			GREATEST(current_account.created_on, ('01-01-' || _year::text)::date)))::int;
+                IF EXTRACT(MONTH FROM t_date) = ANY (excluded_months) OR t_date < current_account.created_on THEN
+                    CONTINUE;
+                END IF;
+                account_id := current_account.account_id;
+                transaction_amount := CAST(RANDOM() * 400 - 200 AS NUMERIC)::money;
+                transaction_date := t_date;
+                RETURN NEXT;
+            END LOOP;
+        END LOOP;
+    RETURN;
+END;
+$$
+LANGUAGE plpgsql;
 ```
+<sup>Create a new function **generate_transactions** that returns a table by looping through all valid accounts and then utilizing the RETURN NEXT plpgsql pattern</sup>
 
+Finally, I created a function to populate the `rules` table with some `accountType` specific penalties. I decided that because I don't want to have contradictory rules for any given year, I would need to utilize the UPSERT sql pattern where whenever there is a collision (i.e. when the input year, account_type, and rule_type is already in the `rules` table) then update the fee value instead of inserting a new record.
+
+```sql
+CREATE OR REPLACE FUNCTION upsert_rules(
+        _rule_year INTEGER,
+        _account_type account_type,
+        _rule_type ruleType,
+        _fee feeType
+    ) RETURNS VOID AS $$ BEGIN
+INSERT INTO rules (
+        rule_year,
+        account_type,
+        rule_type,
+        fee
+    )
+VALUES (
+        _rule_year,
+        _account_type,
+        _rule_type,
+        _fee
+    ) ON CONFLICT (rule_year, account_type, rule_type) DO
+UPDATE
+SET fee = excluded.fee;
+END;
+$$ LANGUAGE plpgsql;
 ```
-# TODO
- - ~~More informative README file~~
- - ~~New account generation function~~
- - Update the ~~rules table~~ and the ~~upsert_rules,~~ ~~generate_transactions,~~ calculate_year_end_balances functions to account for different accountTypes and different begin dates for fees.
- - Dockerfile for orchestration, 
+<sup>Create a new function **upsert_rules** to perform the INSERT UPDATE ON CONFLICT sql command.</sup>
+
+### Step 5: Calculating Year-end Balance
+TODO
+
+[^1]: Account types are determined randomly. The `weights` array is transformed using some user-defined sql and plpgsql functions so that the values sum to 1. In the case that there are one or more negative values passed to the `weights` parameter, array values `a` have `y` added to them where `y = 0 - min(weights)`. To keep function logic maintainable and legible, I created a module of utility functions to manipulate arrays. This was additionally in order to avoid having to write sql code like, `SELECT COALESCE((SELECT SUM(x) FROM UNNEST({some_array}) AS x), 0.0)` over and over.
