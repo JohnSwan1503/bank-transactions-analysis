@@ -72,7 +72,6 @@ DECLARE
     y numeric;
 BEGIN
     arr := array_shift_min(arr, GREATEST(array_min(arr), 0.0));
-    RAISE NOTICE 'arr: %', arr;
     y := array_sum(arr);
     IF y = 0 THEN
         RETURN ARRAY (
