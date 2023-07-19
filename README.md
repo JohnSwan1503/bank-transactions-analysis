@@ -136,7 +136,8 @@ CREATE TABLE IF NOT EXISTS rules(
 <sup>_Create a **rules** table to store the penalties, their types, fee structure, trigger, starting year, and account type they apply to._</sup>
 
 ---
-### Step 4: Generating the Data
+### Generating Data
+#### Step 1: Creating Semi-Random Accounts
 Now I could **finally** start inserting some data into these tables. However, considering that there would be potentially thousands of records to insert, I did't want to do that manually if I could help it. Luckily sql and plpgsql functions and procedures can do that work for me.
 
 First, to generate an arbitrary number of accounts (with different types) I created `generate_accounts(int, numeric[], date)` to return a table (think: output of a SELECT statement) of account types and starting dates. The function would would accept the following parameters: [^1]
@@ -219,6 +220,7 @@ LANGUAGE plpgsql;
 ```
 <sup>Create a new function, **generate_accounts** that returns a table by utilizing the **RETURN NEXT** plpgsql pattern</sup>
 
+#### Generating Random Transactions
 Next, to generate some transaction data, I created `generate_transactions(integer, integer)` to return a table of `account_ids`, `transaction_amounts`, and `transaction_dates`. Since this endeavor was sufficiently complex: 
  - I decided to just pick a ranom value in the range -200..200 as the transaction ammount for all transactions. 
  - There is an integer input parameter `year` that defines the year to create transactions for.
@@ -279,6 +281,7 @@ LANGUAGE plpgsql;
 ```
 <sup>Create a new function **generate_transactions** that returns a table by looping through all valid accounts and then utilizing the RETURN NEXT plpgsql pattern</sup>
 
+#### Making Rules
 Finally, I created a function to populate the `rules` table with some `accountType` specific penalties. I decided that because I don't want to have contradictory rules for any given year, I would need to utilize the UPSERT sql pattern where whenever there is a collision (i.e. when the input year, account_type, and rule_type is already in the `rules` table) then update the fee value instead of inserting a new record.
 
 ```sql
