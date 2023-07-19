@@ -46,11 +46,10 @@ services:
 
 ---
 #### Step Two: Transactions
-Now I can create a table to store the transactions data to derive my solution from. However, since I now can control the table definition, I can take care of one of the requirements from the prompt: keeping track of the transaction types in order to determnine if certain activity penalties should be applied. This is possible to as a step in the solution query, but as it is tracking something with only 2 states, it's free to generate in the table itself, and not worth the legibility cost in the solution logic. 
+Now I could create a `transactions` table to store the data to derive my solution from. However, since I now can control the table definition, I can take care of one of the requirements from the prompt: keeping track of the transaction types in order to determnine if certain activity penalties should be applied. This is possible to as a step in the solution query, but as it is tracking something with only 2 states, it's free to generate in the table itself, and not worth the legibility cost in the solution logic. Also, to increase the complexity of the challenge now that time was no longer a factor, I decided to expand the scope of the problem: 
+> Instead of generating the transactions of a single account for a single year and calculating the final balance with the monthly fees applied, I can generate the transactions arbitrarily many accounts for an arbitrary number of years and calculate the year end balance for any given year within that range.
 
-Also, to increase the complexity of the challenge now that time is no longer a factor, I decided to expand the scope of the problem: instead of generating the transactions of a single account for a single year and calculating the final balance with the monthly fees applied, I can generate the transactions arbitrarily many accounts for an arbitrary number of years and calculate the year end balance for any given year within that range. I'll pretend that this bank was started Jan-1 2020, so I added a constraint to the transaction_date column as a way to safeguard any transactions from being backdated before that point in time.
-
-<sup>_Create a **transactionType** ENUM data type for use in the **transactions** table.:_</sup>
+I pretended that my bank was started Jan-1 2020, so I added a constraint to the transaction_date column as a way to safeguard any transactions from being backdated before that point in time.
 
 ```sql
 CREATE TYPE transactionType AS ENUM(
@@ -112,10 +111,86 @@ Now that I had a place to hold the accounts and their types, I could start think
    - For account `activity` penalties,
      - a negative `feeType.rule_value` indicates an account inactivity fee
      - a positive `feeType.rule_value` inidates an account overactivity fee
-     - 
 
+```sql
+CREATE TYPE ruleType AS ENUM(
+    'activity',
+    'balance'
+);
 
+CREATE TYPE feeType AS (
+    rule_value numeric,
+    fee money
+);
+```
+<sup>_Create a **ruleType** ENUM and a **feeType** composite type for use in the **rules** table._</sup>
 
+```sql Create a **rules** table to store the penalties, their types, fee structure, trigger, starting year, and account type they apply to.
+CREATE TABLE IF NOT EXISTS rules(
+    rule_year integer NOT NULL CHECK (rule_year >= 2020),
+    account_type accountType NOT NULL,
+    rule_type ruleType NOT NULL,
+    fee feeType NOT NULL PRIMARY KEY (rule_year, account_type, rule_type)
+);
+```
+<sup>_Create a **rules** table to store the penalties, their types, fee structure, trigger, starting year, and account type they apply to._</sup>
+
+---
+### Step 4: Generating the Data
+Now I could **finally** start inserting some data into these tables. However, considering that there would be potentially thousands of records to insert, I did't want to do that manually if I could help it. Luckily sql and plpgsql functions and procedures can do that work for me.
+
+First, to generate an arbitrary number of accounts (with different types) I created `generate_accounts(int, numeric[], date)` to return a table (think: output of a SELECT statement) of account types and starting dates. The function would would accept the following parameters:
+ - `num_accounts` _(integer)_: the number of accounts to generate; required
+ - `weights` _(numeric\[3])_: array of weights to defining the relative distribution of account types; optional
+   - Order of weights: `personal`, `business`, and `executiveSelect`
+   - Defaults to an equal distribution \[1, 1, 1]
+ - `start_date` _(date)_: date to pass as the account `created_on`; optional
+   - Defaults to a different random date between the current date and Jan-1, 2020 for each account being generated.
+   - If parameter value is prior to Jan-1, 2020 then the latter of the two dates is used.
+
+```plpgsql Testing Testing
+CREATE OR REPLACE FUNCTION generate_accounts(num_accounts integer, weights
+    numeric[3] DEFAULT ARRAY[1.0, 1.0, 1.0], start_date date DEFAULT NULL)
+    RETURNS TABLE(
+        account_type accountType,
+        created_on date
+    )
+    AS $$
+BEGIN
+    IF ARRAY_LENGTH(weights, 1) < 3 THEN
+        RAISE EXCEPTION 'Weights array must have 3 elements';
+    END IF;
+    weights := ARRAY_SCALE(weights, 1.0);
+    FOR EACH IN 1..num_accounts LOOP
+        account_type :=(
+            SELECT
+                CASE WHEN RANDOM() < weights[1] THEN
+                    'personal'::accountType
+                WHEN RANDOM() < weights[1] + weights[2] THEN
+                    'business'::accountType
+                ELSE
+                    'executiveSelect'::accountType
+                END);
+        IF start_date IS NULL THEN
+	    created_on := '01-01-2020'::date +(RANDOM() *(CURRENT_DATE -
+		'01-01-2020'::date))::int;
+        ELSE
+            created_on := GREATEST(start_date, '01-01-2020'::date);
+        END IF;
+        RETURN NEXT;
+    END LOOP;
+END;
+$$
+LANGUAGE plpgsql;
+
+```
+
+#### Array Manipulation Functions
+Account types are determined randomly. The `weights` array is transformed using some user-defined sql and plpgsql functions so that the values sum to 1. In the case that there are one or more negative values passed to the `weights` parameter, array values `a` have `y` added to them where `y = 0 - min(weights)`.
+
+```
+
+```
 # TODO
  - ~~More informative README file~~
  - ~~New account generation function~~
