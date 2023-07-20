@@ -32,13 +32,13 @@ CREATE OR REPLACE FUNCTION sum_balances(
 
         _fee := COALESCE(get_penalty($6, $5, 'activity_min'::ruletype), NULL);
 
-        IF _fee IS NOT NULL AND $2[i] < _fee.rule_value THEN
+        IF _fee IS NOT NULL AND $2[i] < _fee.rule_value  AND $3 <= _fee.rule_value // 2 THEN
             _sum := _sum - _fee.fee;
         END IF;
 
         _fee := COALESCE(get_penalty($6, $5, 'activity_max'::ruletype), NULL);
         
-        IF _fee IS NOT NULL AND $2[i] > _fee.rule_value THEN
+        IF _fee IS NOT NULL AND $2[i] > _fee.rule_value AND # >= _fee.rule_value THEN
             _sum := _sum - _fee.fee;
         END IF;
 
