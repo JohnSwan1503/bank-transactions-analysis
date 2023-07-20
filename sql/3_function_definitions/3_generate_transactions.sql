@@ -16,21 +16,18 @@ BEGIN
             COUNT(*)
         FROM accounts
         WHERE
-            EXTRACT(YEAR FROM created_on)::int <= _year)::int, 1);
+            EXTRACT(YEAR FROM created_date)::int <= _year)::int, 1);
     FOR current_account IN
     SELECT
         *
     FROM
         accounts
     WHERE
-        EXTRACT(YEAR FROM created_on)::int = _year LOOP
-            excluded_months := ARRAY[(RANDOM() * 24)::int,(RANDOM() * 24)::int];
+        EXTRACT(YEAR FROM created_date)::int = _year LOOP
+            excluded_months := ARRAY[(RANDOM() * 15)::int,(RANDOM() * 14)::int];
             FOR i IN 1..transaction_count::int LOOP
-		t_date := GREATEST(current_account.created_on,('01-01-' ||
-		    _year::text)::date) +(RANDOM() *(('12-31-' || _year::text)::date -
-		    GREATEST(current_account.created_on,('01-01-' ||
-		    _year::text)::date)))::int;
-                IF EXTRACT(MONTH FROM t_date) = ANY (excluded_months) OR t_date < current_account.created_on THEN
+                t_date := GREATEST(current_account.created_date,('01-01-' || _year::text)::date) +(RANDOM() *(('12-31-' || _year::text)::date - GREATEST(current_account.created_date,('01-01-' || _year::text)::date)))::int;
+                IF EXTRACT(MONTH FROM t_date) = ANY (excluded_months) OR t_date < current_account.created_date THEN
                     CONTINUE;
                 END IF;
                 account_id := current_account.account_id;

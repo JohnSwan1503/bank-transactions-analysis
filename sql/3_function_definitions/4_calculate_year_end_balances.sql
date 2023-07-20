@@ -1,69 +1,53 @@
---TODO: Update this function based on the schema changes made
-CREATE OR REPLACE FUNCTION calculate_year_end_balances()
-    RETURNS TABLE(
-        account_id integer,
-        end_of_year_balance money
-    )
-    AS $$
-DECLARE
-    _month integer;
-    running_balance money;
-    monthly_transactions integer;
-    rule rules % ROWTYPE;
-    current_account RECORD;
-    TRANSACTION RECORD;
-BEGIN
-    SELECT
-        INTO rule *
-    FROM
-        rules
-    WHERE
-        rule_year = 2023;
-    FOR current_account IN
-    SELECT
-        *
-    FROM
-        accounts LOOP
-            running_balance := current_account.account_balance_jan1;
-            FOR _month IN 1..12 LOOP
-                FOR TRANSACTION IN (
-                    SELECT
-                        t.transaction_amount
-                    FROM
-                        transactions t
-                    WHERE
-                        t.account_id = current_account.account_id
-                        AND EXTRACT(MONTH FROM t.transaction_date) = _month
-                        AND EXTRACT(YEAR FROM t.transaction_date) = 2023
-                    ORDER BY
-                        t.transaction_date)
-                        LOOP
-                            running_balance := running_balance + transaction.transaction_amount;
-                        END LOOP;
-                -- Apply the fees for the _month if necessary
-                IF running_balance < MONEY '0.00' THEN
-                    running_balance := running_balance - rule.overdraft_fee;
-                END IF;
-                SELECT
-                    INTO monthly_transactions COUNT(*)
-                FROM
-                    transactions t
-                WHERE
-                    t.account_id = current_account.account_id
-                    AND EXTRACT(MONTH FROM t.transaction_date) = _month
-                    AND EXTRACT(YEAR FROM t.transaction_date) = 2023;
-                IF monthly_transactions < rule.minimum_transactions THEN
-                    running_balance := running_balance - rule.minimum_transactions_fee;
-                ELSIF monthly_transactions > rule.maximum_transactions THEN
-                    running_balance := running_balance - rule.maximum_transactions_fee;
-                END IF;
-            END LOOP;
-            calculate_year_end_balances.account_id := current_account.account_id;
-            calculate_year_end_balances.end_of_year_balance := running_balance;
-            RETURN NEXT;
-        END LOOP;
-    RETURN;
-END;
-$$
-LANGUAGE plpgsql;
 
+CREATE OR REPLACE FUNCTION get_penalty(
+    integer,
+    accounttype,
+    ruletype
+) RETURNS feetype LANGUAGE sql IMMUTABLE AS $$
+    SELECT
+        r.fee
+    FROM
+        rules r
+    WHERE
+        r.rule_year <= $1 AND
+        r.account_type = $2 AND
+        r.rule_type = $3;
+$$;
+
+CREATE OR REPLACE FUNCTION sum_balances(
+    money[], 
+    bigint[],
+    bigint[],
+    money, 
+    accounttype,
+    integer
+)   RETURNS money AS $$
+    DECLARE
+        _sum money;
+        _fee feetype;
+    BEGIN
+        _sum := $4;
+    FOR i IN 1..ARRAY_LENGTH($1, 1) LOOP
+        _sum := _sum + $1[i];
+
+        _fee := COALESCE(get_penalty($6, $5, 'activity_min'::ruletype), NULL);
+
+        IF _fee IS NOT NULL AND $2[i] < _fee.rule_value THEN
+            _sum := _sum - _fee.fee;
+        END IF;
+
+        _fee := COALESCE(get_penalty($6, $5, 'activity_max'::ruletype), NULL);
+        
+        IF _fee IS NOT NULL AND $2[i] > _fee.rule_value THEN
+            _sum := _sum - _fee.fee;
+        END IF;
+
+        _fee := COALESCE(get_penalty($6, $5, 'balance'::ruletype), NULL);
+
+        IF _fee IS NOT NULL AND _sum < _fee.rule_value THEN
+            _sum := _sum - _fee.fee;
+        END IF;
+    END LOOP;
+    RETURN _sum;
+    END;
+$$ LANGUAGE plpgsql;

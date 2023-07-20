@@ -5,23 +5,10 @@ services:
   db:
     image: postgres
     restart: always
-    hostname: postgres
+    hostname: "postgres"
     environment:
-      POSTGRES_PASSWORD: example
-      POSTGRES_USER: postgres
-      POSTGRES_DB: postgres
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "200k"
-        max-file: "3"
+      POSTGRES_PASSWORD: "example"
+      POSTGRES_USER: "postgres"
+      POSTGRES_DB: "postgres"
     ports:
       - 5432:5432
-    # volumes:
-    #   - ./postgres-data:/var/lib/postgresql/data
-    #   - ./sql/1_data_types.sql:/docker-entrypoint-initdb.d/1_data_types.sql
-    #   - ./sql/2_table_definition.sql:/docker-entrypoint-initdb.d/2_table_definition.sql
-    #   - ./sql/3_function_definitions/1_generate_accounts.sql:/docker-entrypoint-initdb.d/3_function_definitions/1_generate_accounts.sql
-    #   - ./sql/3_function_definitions/2_generate_rules.sql:/docker-entrypoint-initdb.d/3_function_definitions/2_generate_rules.sql
-    #   - ./sql/3_function_definitions/3_generate_transactions.sql:/docker-entrypoint-initdb.d/3_function_definitions/2_generate_transactions.sql
-    #   - ./sql/3_function_definitions/4_calculate_year_end_balances.sql:/docker-entrypoint-initdb.d/3_function_definitions/4_calculate_year_end_balances.sql
