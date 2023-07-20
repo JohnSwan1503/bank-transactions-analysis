@@ -312,6 +312,98 @@ $$ LANGUAGE plpgsql;
 
 ---
 ### Finding a Solution
-TODO
+Finally I was ready to attempt a solution. Again, to make things interesting, I wanted to raise the level of difficulty even more than it already was at by making the fees of one month affect the balance of the next month. As far as I am aware, there is no purely SQL way to achieve this in postgreSQL. This is unfortunate as plpgsql loops are less than ideal. But since the scope was limited to a single year's worth of months, I figured as long as things remain relatively small it wouldn't be too prohibitive.  Additionally I decided that the fees could possible incur a balance fee if the running balance dips below the threshold as defined by penalty in the rules table. So the first order of business was to create a function that would get the appropriate fees to apply. Then I created a function to step through the months of account activity for a single account (including balances, transaction count, debit count) and apply all penalties on those aggregates.  
+
+```plpgsql
+CREATE OR REPLACE FUNCTION get_penalty(
+    integer,
+    accounttype,
+    ruletype
+) RETURNS feetype LANGUAGE sql IMMUTABLE AS $$
+    SELECT
+        r.fee
+    FROM
+        rules r
+    WHERE
+        r.rule_year <= $1 AND
+        r.account_type = $2 AND
+        r.rule_type = $3;
+$$;
+```
+<sup>Create a new function **get_penalty** that attempts to find the most recent fee given the year of the transaction, the type of the account transacting, and the type of rule being applied</suo>
+
+```plpgsql
+CREATE OR REPLACE FUNCTION sum_balances(
+    money[], 
+    bigint[],
+    bigint[],
+    money, 
+    accounttype,
+    integer
+)   RETURNS money AS $$
+    DECLARE
+        _sum money;
+        _fee feetype;
+    BEGIN
+        _sum := $4;
+    FOR i IN 1..ARRAY_LENGTH($1, 1) LOOP
+        _sum := _sum + $1[i];
+
+        _fee := COALESCE(get_penalty($6, $5, 'activity_min'::ruletype), NULL);
+
+        IF _fee IS NOT NULL AND $2[i] < _fee.rule_value  AND $3 <= _fee.rule_value // 2 THEN
+            _sum := _sum - _fee.fee;
+        END IF;
+
+        _fee := COALESCE(get_penalty($6, $5, 'activity_max'::ruletype), NULL);
+        
+        IF _fee IS NOT NULL AND $2[i] > _fee.rule_value AND # >= _fee.rule_value THEN
+            _sum := _sum - _fee.fee;
+        END IF;
+
+        _fee := COALESCE(get_penalty($6, $5, 'balance'::ruletype), NULL);
+
+        IF _fee IS NOT NULL AND _sum < _fee.rule_value THEN
+            _sum := _sum - _fee.fee;
+        END IF;
+    END LOOP;
+    RETURN _sum;
+    END;
+$$ LANGUAGE plpgsql;
+```
+<sup>Create a function **sum_balance** that iteratively sums balances and applies the penalties to the aggregated account transaction activity</sup>
+
+Finally I can write my clean SQL query that solve the problem.
+```sql
+WITH monthly_transactions AS (
+    SELECT 
+          t.account_id AS t_account_id,
+          EXTRACT(MONTH FROM t.transaction_date) AS t_month,
+          SUM(t.transaction_amount) AS balance,
+          COUNT(t.transaction_id) AS transaction_count,
+          COUNT(t.transaction_id) FILTER (WHERE t.transaction_type = 'debit'::transactiontype) AS debit_count
+    FROM transactions t
+    WHERE EXTRACT(YEAR FROM t.transaction_date) = 2020
+    GROUP BY 2, 1
+    ORDER BY 4 desc)
+
+SELECT 
+    mt.t_account_id AS account_id,
+    sum_balances(ARRAY_AGG(mt.balance),
+                 ARRAY_AGG(mt.transaction_count),
+                 ARRAY_AGG(mt.debit_count),
+                 a.starting_balance, 
+                 a.account_type) AS ending_balance,
+    a.account_type AS account_type
+FROM GENERATE_SERIES(1, 12) AS m(dt)
+LEFT JOIN monthly_transactions mt ON m.dt = mt.t_month
+JOIN accounts a 
+ON mt.t_account_id = a.account_id
+GROUP BY mt.t_account_id, 
+         a.account_type, 
+         a.starting_balance
+```
+
+Thank you for making it this far.
 
 [^1]: Account types are determined randomly. The `weights` array is transformed using some user-defined sql and plpgsql functions so that the values sum to 1. In the case that there are one or more negative values passed to the `weights` parameter, array values `a` have `y` added to them where `y = 0 - min(weights)`. To keep function logic maintainable and legible, I created a module of utility functions to manipulate arrays. This was additionally in order to avoid having to write sql code like, `SELECT COALESCE((SELECT SUM(x) FROM UNNEST({some_array}) AS x), 0.0)` over and over.
