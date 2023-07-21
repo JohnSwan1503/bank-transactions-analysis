@@ -149,7 +149,7 @@ First, to generate an arbitrary number of accounts (with different types) I crea
    - Defaults to a different random date between the current date and Jan-1, 2020 for each account being generated.
    - If parameter value is prior to Jan-1, 2020 then the latter of the two dates is used.
 
-```plpgsql
+```sql
 CREATE OR REPLACE FUNCTION array_scale(arr numeric[], x numeric DEFAULT 1)
     RETURNS numeric[]
     AS $$
@@ -182,7 +182,7 @@ SELECT
 ```
 <sup>Create a new functions **array_scale** [^1]</sup> 
 
-```plpgsql
+```sql
 CREATE OR REPLACE FUNCTION generate_accounts(num_accounts integer, weights
     numeric[3] DEFAULT ARRAY[1.0, 1.0, 1.0], start_date date DEFAULT NULL)
     RETURNS TABLE(
@@ -233,7 +233,7 @@ The two function parameters are as follows:
    - Accounts may not transact before they exist. This negatively affects the to
    - Accounts that were not yet started by the input parameter, `_year` are not considered in {valid accounts}
 
-```plpgsql
+```sql
 CREATE OR REPLACE FUNCTION generate_transactions(transaction_count integer, _year integer)
     RETURNS TABLE(
         account_id integer,
@@ -312,96 +312,126 @@ $$ LANGUAGE plpgsql;
 
 ---
 ### Finding a Solution
-Finally I was ready to attempt a solution. Again, to make things interesting, I wanted to raise the level of difficulty even more than it already was at by making the fees of one month affect the balance of the next month. As far as I am aware, there is no purely SQL way to achieve this in postgreSQL. This is unfortunate as plpgsql loops are less than ideal. But since the scope was limited to a single year's worth of months, I figured as long as things remain relatively small it wouldn't be too prohibitive.  Additionally I decided that the fees could possible incur a balance fee if the running balance dips below the threshold as defined by penalty in the rules table. So the first order of business was to create a function that would get the appropriate fees to apply. Then I created a function to step through the months of account activity for a single account (including balances, transaction count, debit count) and apply all penalties on those aggregates.  
+Finally I was ready to attempt a solution. There was an added level of difficulty as fees could compound and trigger other fees. In order to reflect this behavior I had to employ a pretty long and drawn out sql statement that utilized multiple lateral joins in order to get the self-referencial, conditional, cumulative summation of the fees just right.
 
-```plpgsql
-CREATE OR REPLACE FUNCTION get_penalty(
-    integer,
-    accounttype,
-    ruletype
-) RETURNS feetype LANGUAGE sql IMMUTABLE AS $$
-    SELECT
-        r.fee
-    FROM
-        rules r
-    WHERE
-        r.rule_year <= $1 AND
-        r.account_type = $2 AND
-        r.rule_type = $3;
-$$;
-```
-<sup>Create a new function **get_penalty** that attempts to find the most recent fee given the year of the transaction, the type of the account transacting, and the type of rule being applied</suo>
+I also broke out a sql function to capture the edgecase when a particular type of account is exempt (doe not yet have any fees defined yet) from a particular type of penalty. This function populates those missing values with a null value and makes interacting with that year's set of rules stable as there will always be 3 penalty rule options to check for each type of account. 
 
-```plpgsql
-CREATE OR REPLACE FUNCTION sum_balances(
-    money[], 
-    bigint[],
-    bigint[],
-    money, 
-    accounttype,
-    integer
-)   RETURNS money AS $$
-    DECLARE
-        _sum money;
-        _fee feetype;
-    BEGIN
-        _sum := $4;
-    FOR i IN 1..ARRAY_LENGTH($1, 1) LOOP
-        _sum := _sum + $1[i];
-
-        _fee := COALESCE(get_penalty($6, $5, 'activity_min'::ruletype), NULL);
-
-        IF _fee IS NOT NULL AND $2[i] < _fee.rule_value  AND $3 <= _fee.rule_value // 2 THEN
-            _sum := _sum - _fee.fee;
-        END IF;
-
-        _fee := COALESCE(get_penalty($6, $5, 'activity_max'::ruletype), NULL);
-        
-        IF _fee IS NOT NULL AND $2[i] > _fee.rule_value AND # >= _fee.rule_value THEN
-            _sum := _sum - _fee.fee;
-        END IF;
-
-        _fee := COALESCE(get_penalty($6, $5, 'balance'::ruletype), NULL);
-
-        IF _fee IS NOT NULL AND _sum < _fee.rule_value THEN
-            _sum := _sum - _fee.fee;
-        END IF;
-    END LOOP;
-    RETURN _sum;
-    END;
-$$ LANGUAGE plpgsql;
-```
-<sup>Create a function **sum_balance** that iteratively sums balances and applies the penalties to the aggregated account transaction activity</sup>
-
-Finally I can write my clean SQL query that solve the problem.
 ```sql
-WITH monthly_transactions AS (
-    SELECT 
-          t.account_id AS t_account_id,
-          EXTRACT(MONTH FROM t.transaction_date) AS t_month,
-          SUM(t.transaction_amount) AS balance,
-          COUNT(t.transaction_id) AS transaction_count,
-          COUNT(t.transaction_id) FILTER (WHERE t.transaction_type = 'debit'::transactiontype) AS debit_count
-    FROM transactions t
-    WHERE EXTRACT(YEAR FROM t.transaction_date) = 2020
-    GROUP BY 2, 1
-    ORDER BY 4 desc)
 
-SELECT 
-    mt.t_account_id AS account_id,
-    sum_balances(ARRAY_AGG(mt.balance),
-                 ARRAY_AGG(mt.transaction_count),
-                 ARRAY_AGG(mt.debit_count),
-                 a.starting_balance, 
-                 a.account_type) AS ending_balance,
-    a.account_type AS account_type
-FROM GENERATE_SERIES(1, 12) AS m(dt)
-LEFT JOIN monthly_transactions mt ON m.dt = mt.t_month
-JOIN accounts a 
-ON mt.t_account_id = a.account_id
-GROUP BY mt.t_account_id, 
-         a.account_type, 
-         a.starting_balance
+CREATE OR REPLACE FUNCTION get_penalties(
+          integer
+) RETURNS TABLE (
+    account_type accounttype,
+    fees         feetype[]
+) LANGUAGE sql
+AS $$
+    WITH rules_cte AS ( SELECT x.account_type,
+																															y.rule_type,
+																															r.fee
+                          FROM UNNEST( ARRAY[ 'personal'::accounttype
+																																												, 'business'::accounttype
+																																												, 'dataengineer'::accounttype ] ) AS x ( account_type )
+																				CROSS JOIN UNNEST( ARRAY[ 'activity_min'::ruletype
+																																												, 'activity_max'::ruletype
+																																												, 'balance'::ruletype ] ) AS y ( rule_type )
+																					LEFT JOIN ( SELECT * 
+																																			FROM rules 
+																																		WHERE rule_year = $1 ) r 
+																												ON x.account_type = r.account_type AND 
+																															y.rule_type = r.rule_type
+																						ORDER BY x.account_type, y.rule_type,	r.fee )
+    SELECT r_cte.account_type,
+											ARRAY_AGG( r_cte.fee ) AS fees
+						FROM rules_cte AS r_cte
+		GROUP BY r_cte.account_type
+		ORDER BY r_cte.account_type;
+$$;
+
+CREATE OR REPLACE FUNCTION calculate_year_end_balances(
+										integer
+) RETURNS TABLE (
+				account_id          integer,
+				year_end_balance    money
+) LANGUAGE sql
+				AS $$
+				WITH rules_cte AS (
+								SELECT r.account_type,
+															r.fees
+												FROM get_penalties( 2020 ) r)
+					, transactions_cte AS ( SELECT account_id, 
+																																				transaction_id,
+																																				transaction_type,
+																																				transaction_date,
+																																				EXTRACT( MONTH FROM transaction_date ) as transaction_month, 
+																																				transaction_amount,
+																																				SUM( transaction_amount ) OVER rolling_sum AS running_balance,
+																																				SUM(	1 )   OVER rolling_sum AS transaction_count,
+																																				COALESCE ( SUM( 1	) FILTER ( WHERE transaction_type = 'debit'::transactiontype ) OVER rolling_sum, 0 ) AS debit_count
+																														FROM transactions
+																												WINDOW rolling_sum AS ( PARTITION BY account_id, EXTRACT( MONTH FROM transaction_date )
+																																																								ORDER BY transaction_date 
+																																																				ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW )
+																										ORDER BY account_id, transaction_date ASC )
+				, monthly_balances AS ( SELECT DISTINCT ON ( t.account_id, t.transaction_month )
+																																			t.account_id,
+																																			a.account_type,
+																																			a.starting_balance,
+																																			t.transaction_month,
+																																			t.running_balance AS monthly_balance,
+																																			t.transaction_count,
+																																			t.debit_count
+																														FROM transactions_cte t 
+																														JOIN accounts a USING ( account_id )
+																										ORDER	BY t.account_id, t.transaction_month, t.transaction_count DESC )
+				, monthly_activity_fees AS ( SELECT m.account_id,
+																																								m.account_type,
+																																								m.transaction_month,
+																																								m.starting_balance,
+																																								m.starting_balance + SUM( m.monthly_balance 
+																																																																		- fees.activity_min_fee
+																																																																		- fees.activity_max_fee ) OVER monthly_running_window AS running_balance_with_fees
+																																			FROM monthly_balances m
+																														LEFT JOIN rules_cte r USING ( account_type ),
+																														LATERAL ( SELECT CASE WHEN r.fees[1] IS NULL OR m.transaction_count > r.fees[1].rule_value THEN 0.00::money
+																																																				ELSE r.fees[1].fee END AS	activity_min_fee,
+																																															CASE WHEN r.fees[2] IS NULL OR m.transaction_count < r.fees[2].rule_value THEN 0.00::money
+																																																				WHEN m.transaction_count > r.fees[2].rule_value AND m.debit_count > m.transaction_count * 0.5
+																																																				THEN r.fees[2].fee
+																																																				ELSE 0.00::money END	AS activity_max_fee ) AS fees
+																																	WINDOW monthly_running_window	AS ( PARTITION BY m.account_id 
+																																																																								ORDER BY m.transaction_month ASC 
+																																																																			RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW )
+																															ORDER BY m.account_id, m.transaction_month )
+				, balance_fees AS ( SELECT maf.account_id, 
+																															maf.account_type,
+																															maf.transaction_month,
+																															maf.running_balance_with_fees AS running_balance_with_activity_fees,
+																															maf.running_balance_with_fees - SUM(fees.balance_fee) OVER monthly_running_window AS running_balance_with_fees
+																										FROM monthly_activity_fees maf,
+																							LATERAL ( SELECT CASE WHEN	maf.running_balance_with_fees < r.fees[3].rule_value::money 
+																																													THEN r.fees[3].fee 
+																																													ELSE 0.00::money
+																																									END AS balance_fee 
+																																			FROM rules_cte r
+																																		WHERE maf.account_type = r.account_type ) AS fees
+																								WINDOW monthly_running_window	AS ( PARTITION BY maf.account_id 
+																																																															ORDER BY maf.transaction_month ASC 
+																																																										RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW )
+																						ORDER BY maf.account_id, maf.transaction_month )
+				SELECT DISTINCT ON	(bf.account_id)
+											bf.account_id,
+											bf.running_balance_with_fees - SUM(fees.final_fee) OVER monthly_running_window AS year_end_balance
+						FROM balance_fees bf
+						JOIN rules_cte r USING ( account_type ),
+			LATERAL ( SELECT CASE WHEN	bf.running_balance_with_fees < r.fees[3].rule_value::money 
+																									THEN r.fees[3].fee 
+																									ELSE 0.00::money
+																					END AS final_fee ) AS fees
+				WINDOW monthly_running_window	AS ( PARTITION BY bf.account_id 
+																																											ORDER BY bf.transaction_month ASC 		
+																																						RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW )
+		ORDER BY bf.account_id, bf.transaction_month DESC;
+$$;
 ```
 
 Thank you for making it this far.
