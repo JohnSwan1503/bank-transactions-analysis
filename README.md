@@ -408,7 +408,7 @@ CREATE OR REPLACE FUNCTION calculate_year_end_balances(
                                maf.running_balance_with_fees AS running_balance_with_activity_fees,
                                maf.running_balance_with_fees - SUM(fees.balance_fee) OVER monthly_running_window AS running_balance_with_fees
                           FROM monthly_activity_fees maf,
-                       LATERAL ( SELECT CASE WHEN	maf.running_balance_with_fees < r.fees[3].rule_value::money 
+                       LATERAL ( SELECT CASE WHEN maf.running_balance_with_fees < r.fees[3].rule_value::money 
                                              THEN r.fees[3].fee 
                                              ELSE 0.00::money
                                          END AS balance_fee 
