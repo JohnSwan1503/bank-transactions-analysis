@@ -365,7 +365,7 @@ CREATE OR REPLACE FUNCTION calculate_year_end_balances(
                                     EXTRACT( MONTH FROM transaction_date ) as transaction_month, 
                                     transaction_amount,
                                     SUM( transaction_amount ) OVER rolling_sum AS running_balance,
-                                    SUM(	1 )   OVER rolling_sum AS transaction_count,
+                                    SUM( 1 )   OVER rolling_sum AS transaction_count,
                                     COALESCE ( SUM( 1	) FILTER ( WHERE transaction_type = 'debit'::transactiontype ) OVER rolling_sum, 0 ) AS debit_count
                               FROM transactions
                             WINDOW rolling_sum AS ( PARTITION BY account_id, EXTRACT( MONTH FROM transaction_date )
