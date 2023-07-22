@@ -129,8 +129,8 @@ ALTER  TABLE accounts
 <sup>_Create an **accounts** table. Include a stored generated column **starting_balance** based on the account type and constrain the **created_on** date to not be before Jan-1, 2020._</sup>
 
 Now that I had a place to hold the accounts and their types, I could start thinking about how I wanted to define the transaction and account balance rules for the bank. I created two new types to define the penalties: 
- - `ruleType` to label if it is an account activty penalty or an account balance penalty and
- - `feeType` to store the limit (or `rule_value`) and the `fee` to pay if that limit is violated
+ - `ruletype` to label if it is an account activty penalty or an account balance penalty and
+ - `feetype` to store the limit (or `rule_value`) and the `fee` to pay if that limit is violated
    - For account `balance` rules, the `feeType.rule_value` defines the minimum account balance
    - For account `activity` penalties,
      - a negative `feeType.rule_value` indicates an account inactivity fee
@@ -171,7 +171,7 @@ Now I could **finally** start inserting some data into these tables. However, co
 First, to generate an arbitrary number of accounts (with different types) I created `generate_accounts(int, numeric[], date)` to return a table (think: output of a SELECT statement) of account types and starting dates. The function would would accept the following parameters: [^1]
  - `num_accounts` _(integer)_: the number of accounts to generate; required
  - `weights` _(numeric\[3])_: array of weights to defining the relative distribution of account types; optional
-   - Order of weights: `personal`, `business`, and `executiveSelect`
+   - Order of weights: `personal`, `business`, and `dataengineer`
    - Defaults to an equal distribution \[1, 1, 1]
  - `start_date` _(date)_: date to pass as the account `created_on`; optional
    - Defaults to a different random date between the current date and Jan-1, 2020 for each account being generated.
@@ -271,11 +271,12 @@ Next, to generate some transaction data, I created `generate_transactions(intege
  - I decided to just pick a ranom value in the range -200..200 as the transaction ammount for all transactions. 
  - There is an integer input parameter `year` that defines the year to create transactions for.
  - To randomly incur penalties for no monthly activity, 1 - 2 random months are optionally picked for each account generating transactions.
+
 The two function parameters are as follows:
- - `transation_count` _(integer)_: The maximum number of transactions to select
-   - Every valid account has `transaction_count // count({valid accounts})` (or 1, whichever is bigger) opportunities to generate a transaction.
+ - `p_transation_count` _(integer)_: The maximum number of transactions to select
+   - Every valid account has `transaction_count` (or 1, whichever is bigger) opportunities to generate a transaction.
    - If for some reason a transaction cannot occur, the loop continues.
- - `_year` _(integer)_: The year the generated transactions occur in
+ - `p_year` _(integer)_: The year the generated transactions occur in
    - Accounts may not transact before they exist. This negatively affects the to
    - Accounts that were not yet started by the input parameter, `_year` are not considered in {valid accounts}
 
