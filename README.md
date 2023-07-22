@@ -1,4 +1,4 @@
-# Problem_3_of_3
+# Problem_3_of_3 Bank Transactions Analysis
 A fun exploration of a SQL code assessment 
 
 The original prompt was to get a year end account balance for a single bank account's transactions for that year,
@@ -52,7 +52,7 @@ Now I could create a `transactions` table to store the data to derive my solutio
 I pretended that my bank was started Jan-1 2020, so I added a constraint to the transaction_date column as a way to safeguard any transactions from being backdated before that point in time.
 
 ```sql
-CREATE TYPE transactionType AS ENUM(
+CREATE TYPE transactiontype AS ENUM(
     'debit',
     'credit'
 );
@@ -60,18 +60,28 @@ CREATE TYPE transactionType AS ENUM(
 <sup>_Create a **transactionType** ENUM data type for use in the **transactions** table.:_</sup>
 
 ```sql
-CREATE TABLE IF NOT EXISTS transactions(
-    transaction_id serial NOT NULL PRIMARY KEY,
-    account_id integer NOT NULL FOREIGN KEY REFERENCES accounts(account_id), -- Some foreshadowing for later
-    transaction_date date NOT NULL CHECK (transaction_date >= '01-01-2020'::date), --
-    transaction_amount money NOT NULL,
-    transaction_type transactionType GENERATED ALWAYS AS (
-        CASE WHEN transaction_amount < money '0.00' THEN
-            'debit'::transactionType
-        ELSE
-            'credit'::transactionType
-        END ) STORED
+CREATE TABLE transactions (
+    transaction_id      serial          NOT NULL,
+    account_id          integer         NOT NULL,
+    transaction_date    date            NOT NULL,
+    transaction_amount  money           NOT NULL,
+                        CONSTRAINT      transaction_id_pk      PRIMARY KEY (transaction_id),
+                        CONSTRAINT      transaction_date_check CHECK       (transaction_date BETWEEN '2020-01-01'::date AND '2030-12-31'::date)
 );
+
+CREATE OR REPLACE FUNCTION generate_transaction_type(
+            transactions.transaction_amount%TYPE
+) RETURNS   transactiontype LANGUAGE sql IMMUTABLE AS $$ 
+    SELECT
+        CASE WHEN $1 < '0.00'::transactions.transaction_amount%TYPE 
+             THEN 'debit'::transactiontype
+             ELSE 'credit'::transactiontype
+        END;
+$$;
+
+ALTER TABLE transactions ADD COLUMN 
+    transaction_type    transactiontype NOT NULL     GENERATED ALWAYS AS   (generate_transaction_type(transaction_amount)) STORED;
+
 ```
 <sup>_Create a **transactions** table. Include a stored generated column **transaction_type** to label transaction type and constrain the transaction date to not be before Jan-1, 2020._</sup>
 
@@ -82,25 +92,39 @@ Here is where I begin to really depart from the original scope of the problem as
 Then I had a thought: "If I can create any number of rules/penalties, why not create specific types of accounts to determine which penalties are applied and when?" So in addition to a table to store the rules' definitions, I created an accounts table to store the different accounts transacting at the my bank as well as information about what the type of account it is, when it was opened, and the starting balance. To simplify, I decided to make the starting balance a generated field depending on the type of the account.
 
 ```sql
-CREATE TYPE accountType AS ENUM(
+CREATE TYPE accounttype AS ENUM(
     'personal',
     'business',
-    'executiveSelect',
+    'dataengineer'
 );
 ```
 <sup>_Create an **accountType** ENUM to store the different account type names for use in the **accounts** and **rules** tables._</sup>
 
 ```sql
-CREATE TABLE IF NOT EXISTS accounts(
-    account_id integer NOT NULL PRIMARY KEY,
-    account_type accountType NOT NULL DEFAULT 'personal' ::accountType,
-    created_on date NOT NULL CHECK (created_on >= '01-01-2020'::date),
-    starting_balance GENERATED ALWAYS AS (
-        CASE WHEN account_type = 'personal'::accountType THEN money '1000.00'
-            WHEN account_type = 'business'::accountType THEN money '10000.00'
-            WHEN account_type = 'executiveSelect'::accountType THEN money '10000.00'
-        END) STORED
+CREATE TABLE accounts (
+    account_id       serial      NOT NULL,
+    account_type     accounttype NOT NULL,
+    created_date     date        NOT NULL,
+                     CONSTRAINT  account_id_pk      PRIMARY KEY (account_id),
+                     CONSTRAINT  created_date_check CHECK       (created_date BETWEEN '2019-01-01'::date AND '2030-12-31'::date)
 );
+
+CREATE OR REPLACE FUNCTION generate_starting_balance(
+             accounts.account_type%TYPE
+)   RETURNS  transactions::transaction_amount%TYPE
+    LANGUAGE sql 
+IMMUTABLE AS $$
+    SELECT
+        CASE account_type
+            WHEN 'personal'::accounttype     THEN '1000.00'::transactions::transaction_amount%TYPE
+            WHEN 'business'::accounttype     THEN '10000.00'::transactions::transaction_amount%TYPE
+            WHEN 'dataengineer'::accounttype THEN '100000.00'::transactions::transaction_amount%TYPE
+        END;
+$$;
+
+ALTER  TABLE accounts 
+  ADD COLUMN starting_balance money NOT NULL GENERATED ALWAYS AS (generate_starting_balance(account_type)) STORED;
+
 ```
 <sup>_Create an **accounts** table. Include a stored generated column **starting_balance** based on the account type and constrain the **created_on** date to not be before Jan-1, 2020._</sup>
 
@@ -113,24 +137,28 @@ Now that I had a place to hold the accounts and their types, I could start think
      - a positive `feeType.rule_value` inidates an account overactivity fee
 
 ```sql
-CREATE TYPE ruleType AS ENUM(
-    'activity',
+CREATE TYPE ruletype AS ENUM(
+    'activity_min',
+    'activity_max',
     'balance'
 );
 
-CREATE TYPE feeType AS (
+CREATE TYPE feetype AS (
     rule_value numeric,
-    fee money
+    fee        money
 );
+
 ```
 <sup>_Create a **ruleType** ENUM and a **feeType** composite type for use in the **rules** table._</sup>
 
 ```sql
-CREATE TABLE IF NOT EXISTS rules(
-    rule_year integer NOT NULL CHECK (rule_year >= 2020),
-    account_type accountType NOT NULL,
-    rule_type ruleType NOT NULL,
-    fee feeType NOT NULL PRIMARY KEY (rule_year, account_type, rule_type)
+CREATE TABLE rules (
+    rule_year    integer     NOT NULL,
+    account_type accounttype NOT NULL,
+    rule_type    ruletype    NOT NULL,
+    fee          feetype     NOT NULL,
+                 CONSTRAINT  rules_pk        PRIMARY KEY (rule_year, account_type, rule_type),
+                 CONSTRAINT  rule_year_check CHECK       (rule_year BETWEEN 2020 AND 2030)
 );
 ```
 <sup>_Create a **rules** table to store the penalties, their types, fee structure, trigger, starting year, and account type they apply to._</sup>
@@ -150,73 +178,91 @@ First, to generate an arbitrary number of accounts (with different types) I crea
    - If parameter value is prior to Jan-1, 2020 then the latter of the two dates is used.
 
 ```sql
-CREATE OR REPLACE FUNCTION array_scale(arr numeric[], x numeric DEFAULT 1)
-    RETURNS numeric[]
-    AS $$
-DECLARE
-    y numeric;
-BEGIN
-    arr := array_shift_min(arr, GREATEST(array_min(arr), 0.0));
-    y := array_sum(arr);
-    IF y = 0 THEN
-        RETURN ARRAY (
-            SELECT
-                x / ARRAY_LENGTH(arr, 1)
-            FROM
-                UNNEST(arr) AS x);
-    ELSE
-        arr := ARRAY (
-            SELECT
-                z * x / y
-            FROM
-                UNNEST(arr) AS z);
-        arr[1] = arr[1] + x - array_sum(arr);
-        RETURN arr;
-    END IF;
-END;
-$$
-LANGUAGE plpgsql;
+CREATE OR REPLACE FUNCTION array_shift_min(
+          numeric[], 
+          numeric    DEFAULT NULL
+) RETURNS numeric[]
+ LANGUAGE sql
+STABLE AS $$
+    SELECT
+          COALESCE( ARRAY( SELECT y + COALESCE( $2, 0.00::numeric ) 
+                                    - MIN( y ) OVER()
+                             FROM UNNEST( $1 ) AS y ), ARRAY[]::numeric[] );
+$$;
 
-SELECT
-    array_sum(ARRAY[1, 2, 3, 4, 5]);
+CREATE OR REPLACE FUNCTION array_shift_min(
+          integer[], 
+          integer    DEFAULT NULL
+) RETURNS integer[]
+ LANGUAGE sql
+STABLE AS $$
+    SELECT
+          COALESCE( ARRAY( SELECT y + COALESCE( $2, 0.00::integer ) 
+                                    - MIN( y ) OVER()
+                             FROM UNNEST( $1 ) AS y ), ARRAY[]::integer[] );
+$$;
+
+CREATE OR REPLACE FUNCTION array_shift_min(
+          money[], 
+          money    DEFAULT NULL
+) RETURNS money[]
+ LANGUAGE sql
+STABLE AS $$
+    SELECT
+          COALESCE( ARRAY( SELECT y + COALESCE( $2, 0.00::money ) 
+                                    - MIN( y ) OVER()
+                             FROM UNNEST( $1 ) AS y ), ARRAY[]::money[] );
+$$;
+
+CREATE OR REPLACE FUNCTION array_scale(
+          numeric[], 
+          numeric    DEFAULT 1.00::numeric
+) RETURNS numeric[]
+ LANGUAGE plpgsql
+STABLE AS $$
+    DECLARE y numeric;
+    BEGIN
+        $1:= array_shift_min( $1, GREATEST( array_min( $1 ), 0.00::numeric ) );
+        y := array_sum($1);
+
+        CASE WHEN y = 0 
+             THEN RETURN ARRAY ( SELECT x / ARRAY_LENGTH( $1, 1 )
+                                   FROM UNNEST( $1 ) AS x );
+
+             ELSE $1:=   ARRAY ( SELECT x * $2 / y
+                                   FROM UNNEST( $1 ) AS x );
+
+         $1[ 1 ] = $1[ 1 ] 
+                 + $2 
+                 - array_sum( $1 );
+
+        RETURN $1;
+    END;
+$$;
 ```
 <sup>Create a new functions **array_scale** [^1]</sup> 
 
 ```sql
-CREATE OR REPLACE FUNCTION generate_accounts(num_accounts integer, weights
-    numeric[3] DEFAULT ARRAY[1.0, 1.0, 1.0], start_date date DEFAULT NULL)
-    RETURNS TABLE(
-        account_type accountType,
-        created_on date
-    )
-    AS $$
-BEGIN
-    IF ARRAY_LENGTH(weights, 1) < 3 THEN
-        RAISE EXCEPTION 'Weights array must have 3 elements';
-    END IF;
-    weights := ARRAY_SCALE(weights, 1.0);
-    FOR EACH IN 1..num_accounts LOOP
-        account_type :=(
-            SELECT
-                CASE WHEN RANDOM() < weights[1] THEN
-                    'personal'::accountType
-                WHEN RANDOM() < weights[1] + weights[2] THEN
-                    'business'::accountType
-                ELSE
-                    'executiveSelect'::accountType
-                END);
-        IF start_date IS NULL THEN
-     created_on := '01-01-2020'::date +(RANDOM() *(CURRENT_DATE -
-  '01-01-2020'::date))::int;
-        ELSE
-            created_on := GREATEST(start_date, '01-01-2020'::date);
-        END IF;
-        RETURN NEXT;
-    END LOOP;
-END;
-$$
-LANGUAGE plpgsql;
-
+CREATE OR REPLACE FUNCTION generate_accounts(
+    p_num_accounts integer, 
+    p_weights      numeric[3]  DEFAULT ARRAY[1.0, 1.0, 1.0], 
+    p_start_date   date        DEFAULT NULL
+) RETURNS TABLE (
+    account_type   accounttype,
+    created_date   date
+) LANGUAGE sql 
+AS $$
+    WITH weights_cte AS ( SELECT CASE WHEN ARRAY_LENGTH( p_weights, 1 ) < 3
+                                      THEN ARRAY_SCALE( ARRAY[1.0, 1.0, 1.0], 1.0 )
+                                      ELSE ARRAY_SCALE( p_weights ) END AS weights )
+    SELECT CASE WHEN RANDOM() < w.weights[1]                THEN 'personal'::accounttype
+                WHEN RANDOM() < w.weights[1] + w.weights[2] THEN 'business'::accounttype
+                ELSE 'dataengineer'::accounttype END AS account_type,
+           CASE WHEN p_start_date IS NULL 
+                THEN '01-01-2020'::date + ( RANDOM() * ( CURRENT_DATE - '01-01-2020'::date) )::int
+                ELSE GREATEST( p_start_date, '01-01-2020'::date ) END AS created_date
+      FROM weights_cte w, LATERAL generate_series(1, p_num_accounts) AS _;
+$$;
 ```
 <sup>Create a new function, **generate_accounts** that returns a table by utilizing the **RETURN NEXT** plpgsql pattern</sup>
 
@@ -234,50 +280,31 @@ The two function parameters are as follows:
    - Accounts that were not yet started by the input parameter, `_year` are not considered in {valid accounts}
 
 ```sql
-CREATE OR REPLACE FUNCTION generate_transactions(transaction_count integer, _year integer)
-    RETURNS TABLE(
-        account_id integer,
-        transaction_amount money,
-        transaction_date date
-    )
-    AS $$
-DECLARE
-    account integer;
-    t_date date;
-    excluded_months int[];
-    current_account RECORD;
-BEGIN
-    transaction_count := transaction_count / GREATEST((
-        SELECT
-            COUNT(*)
-        FROM accounts
-        WHERE
-            EXTRACT(YEAR FROM created_on)::int <= _year)::int, 1);
-    FOR current_account IN
-    SELECT
-        *
-    FROM
-        accounts
-    WHERE
-        EXTRACT(YEAR FROM created_on)::int = _year LOOP
-            excluded_months := ARRAY[(RANDOM() * 24)::int,(RANDOM() * 24)::int];
-            FOR i IN 1..transaction_count::int LOOP
-  t_date := GREATEST(current_account.created_on, ('01-01-' || _year::text)::date) +
-      (RANDOM() * (('12-31-' || _year::text)::date -
-   GREATEST(current_account.created_on, ('01-01-' || _year::text)::date)))::int;
-                IF EXTRACT(MONTH FROM t_date) = ANY (excluded_months) OR t_date < current_account.created_on THEN
-                    CONTINUE;
-                END IF;
-                account_id := current_account.account_id;
-                transaction_amount := CAST(RANDOM() * 400 - 200 AS NUMERIC)::money;
-                transaction_date := t_date;
-                RETURN NEXT;
-            END LOOP;
-        END LOOP;
-    RETURN;
-END;
-$$
-LANGUAGE plpgsql;
+CREATE OR REPLACE FUNCTION generate_transactions(
+    p_transaction_count integer, 
+    p_year              integer
+) RETURNS TABLE (
+    account_id          integer,
+    transaction_amount  money,
+    transaction_date    date
+) LANGUAGE sql
+AS $$
+    WITH accounts_cte   AS ( SELECT account_id, created_date
+                               FROM accounts
+                              WHERE EXTRACT( YEAR FROM created_date )::int <= p_year 
+    ), transactions_cte AS ( SELECT a.account_id,
+                                    a.created_date,
+                                    CAST( RANDOM() * 400 - 200 AS NUMERIC )::money AS transaction_amount,
+                                    GREATEST( a.created_date, ( '01-01-' || p_year::text )::date ) + ( RANDOM() * 365 )::int AS transaction_date
+                               FROM accounts_cte a, LATERAL generate_series( 1, p_transaction_count ) AS _ )
+    SELECT t.account_id, 
+           t.transaction_amount, 
+           t.transaction_date
+      FROM transactions_cte t
+     WHERE t.transaction_date >= t.created_date
+       AND EXTRACT( YEAR FROM t.transaction_date )::int = p_year
+     ORDER BY t.transaction_date ASC, t.account_id ASC;
+$$;
 ```
 <sup>Create a new function **generate_transactions** that returns a table by looping through all valid accounts and then utilizing the RETURN NEXT plpgsql pattern</sup>
 
@@ -286,28 +313,33 @@ Finally, I created a function to populate the `rules` table with some `accountTy
 
 ```sql
 CREATE OR REPLACE FUNCTION upsert_rules(
-        _rule_year INTEGER,
-        _account_type account_type,
-        _rule_type ruleType,
-        _fee feeType
-    ) RETURNS VOID AS $$ BEGIN
-INSERT INTO rules (
-        rule_year,
-        account_type,
-        rule_type,
-        fee
-    )
-VALUES (
-        _rule_year,
-        _account_type,
-        _rule_type,
-        _fee
-    ) ON CONFLICT (rule_year, account_type, rule_type) DO
-UPDATE
-SET fee = excluded.fee;
-END;
-$$ LANGUAGE plpgsql;
+          rules.rule_year%TYPE,
+          rules.account_type%TYPE,
+          rules.rule_type%TYPE,
+          rules.fee%TYPE
+) RETURNS VOID 
+LANGUAGE  plpgsql 
+VOLATILE  AS $$ 
+    BEGIN
+        INSERT INTO rules 
+            ( rule_year
+            , account_type
+            , rule_type
+            , fee )
+        VALUES 
+            ( $1
+            , $2
+            , $3
+            , $4 ) 
+        ON CONFLICT 
+            ( rule_year
+            , account_type
+            , rule_type ) 
+        DO UPDATE SET fee = excluded.fee;
+    END;
+$$;
 ```
+
 <sup>Create a new function **upsert_rules** to perform the INSERT UPDATE ON CONFLICT sql command.</sup>
 
 ---
